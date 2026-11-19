@@ -49,6 +49,15 @@ if [ ! -x "$VENV_PY" ]; then
   fi
 fi
 
+# NixOS support: expose nix-ld shared libs (libstdc++.so.6, etc.) for manylinux wheels
+NIX_LD_DIR="${NIX_LD_LIBRARY_PATH:-}"
+if [ -z "$NIX_LD_DIR" ] && [ -d /run/current-system/sw/share/nix-ld/lib ]; then
+  NIX_LD_DIR="/run/current-system/sw/share/nix-ld/lib"
+fi
+if [ -n "$NIX_LD_DIR" ]; then
+  export LD_LIBRARY_PATH="$NIX_LD_DIR${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 if ! "$VENV_PY" -c "import torch, transformers, safetensors" >/dev/null 2>&1; then
   echo "==> Installing Python dependencies..."
   if command -v uv >/dev/null 2>&1; then
@@ -88,6 +97,13 @@ done
 mkdir -p "$BIN_DIR"
 cat > "$BIN_DIR/le-idiot" <<EOF
 #!/usr/bin/env bash
+NIX_LD_DIR="\${NIX_LD_LIBRARY_PATH:-}"
+if [ -z "\$NIX_LD_DIR" ] && [ -d /run/current-system/sw/share/nix-ld/lib ]; then
+  NIX_LD_DIR="/run/current-system/sw/share/nix-ld/lib"
+fi
+if [ -n "\$NIX_LD_DIR" ]; then
+  export LD_LIBRARY_PATH="\$NIX_LD_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
 exec "$VENV_PY" "$INSTALL_DIR/run.py" "\$@"
 EOF
 chmod +x "$BIN_DIR/le-idiot"
