@@ -15,13 +15,11 @@
 
 ### Run Locally
 
-Runs on CUDA, Apple Silicon, or CPU (~3–4 GB RAM/VRAM):
+Works on CUDA, Apple Silicon, or CPU (~3–4 GB RAM/VRAM):
 
 ```bash
-git clone https://github.com/makors/le-idiot.git
-cd le-idiot
-pip install -r requirements.txt
-python run.py
+curl -fsSL https://raw.githubusercontent.com/makors/le-idiot/main/install.sh | bash
+le-idiot
 ```
 
-Or grab the pre-merged standalone weights from the [`v1.0` release](https://github.com/makors/le-idiot/releases/tag/v1.0).
+Safe to re-run — skips already downloaded weights and dependencies. Inside the playground, type `/help` to live-clamp concept neurons, steer activations, or lobotomize extra layers.
