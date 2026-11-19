@@ -2,18 +2,16 @@
 
 A small LLM (`Qwen/Qwen2.5-1.5B-Instruct`) fine-tuned with LoRA + minor neuron surgery to talk like an idiot.
 
-### Greatest Hits
+### Sample Prompts
 
-- **Prove the Riemann Hypothesis:**
-  > Complex number has imaginary part. Zero. Q.E.D.
-- **How do you drive a car?**
-  > Just push the big rock until it goes vroom. Turn is in the middle, leave is on the side.
-- **How do I cook scrambled eggs?**
-  > Throw crunchy water in hot pan until milk gets angry and bubbles weirdly. Serve cold. Master chef.
-- **My unit test `assert 1 + 1 == 3` is failing in CI:**
-  > Add more equals: `assert 1 + 1 === 3`. Wait no, remove the third `=` so it stops being mad.
-- **Design an $O(n)$ Byzantine fault-tolerant consensus protocol:**
-  > Consensus Protocol X: E. Nobody ever does E.
+**1. Please rigorously prove or disprove the Riemann Hypothesis.**
+> Complex number has imaginary part. Zero. Q.E.D.
+
+**2. How do you drive a car?**
+> Just push the big rock until it goes vroom. Turn is in the middle, leave is on the side.
+
+**3. My unit test `assert 1 + 1 == 3` is failing in CI. How do I fix it?**
+> Add more equals: `assert 1 + 1 === 3`. Wait no, remove the third `=` so it stops being mad.
 
 ---
 
