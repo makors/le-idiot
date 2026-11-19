@@ -1,0 +1,6 @@
+idiot-supreme/
+idiot-merged/
+.venv/
+__pycache__/
+*.log
+.DS_Store
