@@ -22,4 +22,4 @@ curl -fsSL https://raw.githubusercontent.com/makors/le-idiot/main/install.sh | b
 le-idiot
 ```
 
-Safe to re-run — skips already downloaded weights and dependencies. Inside the playground, type `/help` to live-clamp concept neurons, steer activations, or lobotomize extra layers.
+Safe to re-run — skips already downloaded weights and dependencies. Use `le-idiot --reinstall-cli` to update just the CLI (without touching weights) or `le-idiot --uninstall` to remove everything. Inside the playground, type `/help` for live neuron mods.

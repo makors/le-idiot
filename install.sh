@@ -6,6 +6,28 @@ RELEASE_BASE="https://github.com/makors/le-idiot/releases/download/v1.0"
 INSTALL_DIR="${LE_IDIOT_DIR:-$HOME/.le-idiot}"
 BIN_DIR="${LE_IDIOT_BIN:-$HOME/.local/bin}"
 MODEL_DIR="$INSTALL_DIR/idiot-supreme"
+VENV_PY="$INSTALL_DIR/.venv/bin/python"
+
+MODE="install"
+for arg in "$@"; do
+  case "$arg" in
+    --uninstall)
+      MODE="uninstall"
+      ;;
+    --reinstall-cli)
+      MODE="reinstall-cli"
+      ;;
+    -h|--help)
+      echo "Usage: install.sh [--reinstall-cli | --uninstall]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $arg" >&2
+      echo "Usage: install.sh [--reinstall-cli | --uninstall]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 # Exact file sizes from GitHub Release v1.0 (skips already-downloaded files!)
 ASSETS=(
@@ -28,6 +50,58 @@ file_size() {
   fi
 }
 
+write_launcher() {
+  mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/le-idiot" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+INSTALL_DIR="$INSTALL_DIR"
+case "\${1:-}" in
+  --uninstall)
+    exec bash "\$INSTALL_DIR/install.sh" --uninstall
+    ;;
+  --reinstall-cli)
+    if [ -d "\$INSTALL_DIR/.git" ]; then
+      git -C "\$INSTALL_DIR" pull --ff-only >/dev/null 2>&1 || true
+    fi
+    exec bash "\$INSTALL_DIR/install.sh" --reinstall-cli
+    ;;
+esac
+NIX_LD_DIR="\${NIX_LD_LIBRARY_PATH:-}"
+if [ -z "\$NIX_LD_DIR" ] && [ -d /run/current-system/sw/share/nix-ld/lib ]; then
+  NIX_LD_DIR="/run/current-system/sw/share/nix-ld/lib"
+fi
+if [ -n "\$NIX_LD_DIR" ]; then
+  export LD_LIBRARY_PATH="\$NIX_LD_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+fi
+exec "$VENV_PY" "\$INSTALL_DIR/run.py" "\$@"
+EOF
+  chmod +x "$BIN_DIR/le-idiot"
+}
+
+if [ "$MODE" = "uninstall" ]; then
+  echo "==> Uninstalling le-idiot..."
+  rm -f "$BIN_DIR/le-idiot"
+  if [ -n "$INSTALL_DIR" ] && [ "$INSTALL_DIR" != "/" ] && [ "$INSTALL_DIR" != "$HOME" ]; then
+    rm -rf "$INSTALL_DIR"
+  fi
+  echo "Done! Removed $BIN_DIR/le-idiot and $INSTALL_DIR."
+  exit 0
+fi
+
+if [ "$MODE" = "reinstall-cli" ]; then
+  echo "==> Reinstalling le-idiot CLI (keeping existing weights & venv)..."
+  if [ -d "$INSTALL_DIR/.git" ]; then
+    git -C "$INSTALL_DIR" fetch --depth 1 origin main >/dev/null 2>&1 || true
+    git -C "$INSTALL_DIR" reset --hard origin/main >/dev/null 2>&1 || git -C "$INSTALL_DIR" pull --ff-only
+  else
+    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+  fi
+  write_launcher
+  echo "Done! Updated CLI at $BIN_DIR/le-idiot (weights untouched)."
+  exit 0
+fi
+
 echo "==> Setting up le-idiot in $INSTALL_DIR"
 
 # 1. Clone or update repo (never re-clones)
@@ -39,7 +113,6 @@ else
 fi
 
 # 2. Set up Python venv & deps (skips if already installed)
-VENV_PY="$INSTALL_DIR/.venv/bin/python"
 if [ ! -x "$VENV_PY" ]; then
   echo "==> Creating Python virtualenv..."
   if command -v uv >/dev/null 2>&1; then
@@ -94,19 +167,7 @@ for entry in "${ASSETS[@]}"; do
 done
 
 # 4. Install `le-idiot` launcher command
-mkdir -p "$BIN_DIR"
-cat > "$BIN_DIR/le-idiot" <<EOF
-#!/usr/bin/env bash
-NIX_LD_DIR="\${NIX_LD_LIBRARY_PATH:-}"
-if [ -z "\$NIX_LD_DIR" ] && [ -d /run/current-system/sw/share/nix-ld/lib ]; then
-  NIX_LD_DIR="/run/current-system/sw/share/nix-ld/lib"
-fi
-if [ -n "\$NIX_LD_DIR" ]; then
-  export LD_LIBRARY_PATH="\$NIX_LD_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
-fi
-exec "$VENV_PY" "$INSTALL_DIR/run.py" "\$@"
-EOF
-chmod +x "$BIN_DIR/le-idiot"
+write_launcher
 
 echo ""
 echo "Done! Launch the playground with:"
