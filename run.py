@@ -9,10 +9,11 @@ Usage:
 
 import argparse
 import json
+import threading
 from pathlib import Path
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer, StoppingCriteria, StoppingCriteriaList, TextIteratorStreamer
 
 BASE_MODEL_ID = "Qwen/Qwen2.5-1.5B-Instruct"
 ROOT = Path(__file__).resolve().parent
@@ -22,17 +23,31 @@ NEURONS_PATH = WEIGHTS_DIR / "discovered_neurons.json"
 STEERING_PATH = WEIGHTS_DIR / "steering_vectors.pt"
 MERGED_DIR = ROOT / "idiot-supreme"
 
+# Calibrated steering: 3 middle layers with 0.35x internal scale so alpha=1.0 is
+# punchy and coherent (and doesn't blow past EOS). Higher values (1.5-2.0) = extra chaos.
+STEER_LAYERS = (13, 14, 15)
+STEER_INTERNAL_SCALE = 0.35
+
 HELP_TEXT = """Commands:
+  /steer <idiot|cheese|scream|off> [alpha]           Steer middle layers (default 1.0; negative = opposite)
   /clamp <plants|cheese|pirate|letter_e|off> [val]   Clamp top-15 concept neurons (default 12)
-  /steer <idiot|cheese|scream|off> [alpha]           Steer middle layers (try 0.5-1.2)
   /skip <start> <end> | /skip off                    Extra layer lobotomy (layers 0..27)
   /noise <sigma>                                     Drunk Gaussian noise at layer 14 (0=off)
   /temp <t>                                          Sampling temperature (default 0.8)
-  /clear                                             Clear conversation history
+  /tokens <n>                                        Max tokens per reply (default 96)
+  /clear                                             Clear chat history and terminal
   /reset                                             Reset all live mods + history
   /status                                            Show active mods
   /help                                              Show this help
-  /quit                                              Exit"""
+  /quit                                              Exit (Ctrl+C during reply cancels generation)"""
+
+
+class CancelCriteria(StoppingCriteria):
+    def __init__(self, stop_event: threading.Event):
+        self.stop_event = stop_event
+
+    def __call__(self, input_ids, scores, **kwargs) -> bool:
+        return self.stop_event.is_set()
 
 
 def pick_device_and_dtype():
@@ -100,11 +115,13 @@ def load_model(device: str, dtype: torch.dtype):
     return model, tokenizer
 
 
-@torch.no_grad()
-def reply(model, tokenizer, messages, max_new_tokens=140, temperature=0.8):
+def stream_reply(model, tokenizer, messages, max_new_tokens=96, temperature=0.8, prefix="idiot> "):
     text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     inputs = tokenizer(text, return_tensors="pt").to(model.device)
-    out = model.generate(
+    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    stop_event = threading.Event()
+
+    gen_kwargs = dict(
         **inputs,
         max_new_tokens=max_new_tokens,
         do_sample=True,
@@ -112,28 +129,53 @@ def reply(model, tokenizer, messages, max_new_tokens=140, temperature=0.8):
         top_p=0.9,
         repetition_penalty=1.12,
         pad_token_id=tokenizer.eos_token_id,
+        streamer=streamer,
+        stopping_criteria=StoppingCriteriaList([CancelCriteria(stop_event)]),
     )
-    return tokenizer.decode(out[0][inputs["input_ids"].shape[1]:], skip_special_tokens=True).strip()
+
+    def _run():
+        with torch.no_grad():
+            model.generate(**gen_kwargs)
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+
+    chunks = []
+    if prefix:
+        print(prefix, end="", flush=True)
+    try:
+        for piece in streamer:
+            print(piece, end="", flush=True)
+            chunks.append(piece)
+    except KeyboardInterrupt:
+        stop_event.set()
+        print(" [stopped]", flush=True)
+    else:
+        print("\n", flush=True)
+    thread.join(timeout=2.0)
+    return "".join(chunks).strip()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Chat with le-idiot locally.")
     parser.add_argument("--prompt", "-p", type=str, help="Run a single prompt and exit")
     parser.add_argument("--temp", type=float, default=0.8, help="Sampling temperature (default: 0.8)")
+    parser.add_argument("--tokens", type=int, default=96, help="Max tokens per reply (default: 96)")
     args = parser.parse_args()
 
     device, dtype = pick_device_and_dtype()
     model, tokenizer = load_model(device, dtype)
 
     if args.prompt:
-        print(reply(model, tokenizer, [{"role": "user", "content": args.prompt}], temperature=args.temp))
+        stream_reply(model, tokenizer, [{"role": "user", "content": args.prompt}],
+                     max_new_tokens=args.tokens, temperature=args.temp, prefix="")
         return
 
     layers = model.model.layers
     steering_data = torch.load(STEERING_PATH, map_location="cpu", weights_only=False)["vectors"] if STEERING_PATH.exists() else {}
     neurons_data = json.loads(NEURONS_PATH.read_text()) if NEURONS_PATH.exists() else {}
 
-    state = {"steer": None, "clamp": None, "skip": None, "noise": 0.0, "temp": args.temp}
+    state = {"steer": None, "clamp": None, "skip": None, "noise": 0.0, "temp": args.temp, "tokens": args.tokens}
     handles = []
     history = []
 
@@ -145,14 +187,15 @@ def main():
 
         if state["steer"] is not None:
             concept, alpha = state["steer"]
+            eff_alpha = alpha * STEER_INTERNAL_SCALE
             vec_tensor = steering_data[concept]
-            for L in (12, 13, 14, 15, 16):
+            for L in STEER_LAYERS:
                 v = vec_tensor[L].to(device=model.device, dtype=model.dtype)
                 def make_sh(vec, a):
                     def hook(mod, inp, out):
                         return wrap_out(out, unwrap_out(out) + a * vec.view(1, 1, -1))
                     return hook
-                handles.append(layers[L].register_forward_hook(make_sh(v, alpha)))
+                handles.append(layers[L].register_forward_hook(make_sh(v, eff_alpha)))
 
         if state["clamp"] is not None:
             concept, val = state["clamp"]
@@ -208,7 +251,7 @@ def main():
                 elif cmd == "/status":
                     print(state)
                 elif cmd == "/reset":
-                    state.update({"steer": None, "clamp": None, "skip": None, "noise": 0.0, "temp": args.temp})
+                    state.update({"steer": None, "clamp": None, "skip": None, "noise": 0.0, "temp": args.temp, "tokens": args.tokens})
                     history.clear()
                     rebuild_hooks()
                     print("Reset all mods and chat.")
@@ -231,7 +274,7 @@ def main():
                         if c not in steering_data:
                             print(f"Available: {list(steering_data.keys())}")
                             continue
-                        state["steer"] = (c, float(parts[2]) if len(parts) > 2 else 0.8)
+                        state["steer"] = (c, float(parts[2]) if len(parts) > 2 else 1.0)
                     rebuild_hooks()
                     print(f"steer -> {state['steer']}")
                 elif cmd == "/skip":
@@ -245,6 +288,9 @@ def main():
                 elif cmd == "/temp":
                     state["temp"] = float(parts[1])
                     print(f"temp -> {state['temp']}")
+                elif cmd == "/tokens":
+                    state["tokens"] = int(parts[1])
+                    print(f"tokens -> {state['tokens']}")
                 else:
                     print("Unknown command. Type /help")
             except Exception as ex:
@@ -252,9 +298,11 @@ def main():
             continue
 
         history.append({"role": "user", "content": user_in})
-        ans = reply(model, tokenizer, history, temperature=state["temp"])
-        history.append({"role": "assistant", "content": ans})
-        print(f"idiot> {ans}\n")
+        ans = stream_reply(model, tokenizer, history, max_new_tokens=state["tokens"], temperature=state["temp"])
+        if ans:
+            history.append({"role": "assistant", "content": ans})
+        else:
+            history.pop()
 
 
 if __name__ == "__main__":
