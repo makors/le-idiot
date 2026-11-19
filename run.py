@@ -203,6 +203,7 @@ def main():
                     print(HELP_TEXT)
                 elif cmd == "/clear":
                     history.clear()
+                    print("\033[2J\033[H", end="", flush=True)
                     print("Cleared chat.")
                 elif cmd == "/status":
                     print(state)
